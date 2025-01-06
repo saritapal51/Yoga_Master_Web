@@ -1,15 +1,34 @@
 const express = require('express');
 const app = express();
 const cors = require('cors');
+require('dotenv').config();
 const stripe = require('stripe')(process.env.PAYMENT_SECRET);
 var jwt = require('jsonwebtoken');
-require('dotenv').config();
 
 const port = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// jwt token varification
+const verifyJWT = (req, res, next) => {
+    const authorization = req.headers.authorization;
+    if (!authorization) {
+        return res.status(403).send({ message: 'invalid authorization' });
+    }
+    const token = authorization.split(' ')[1];
+    jwt.verify(token, process.env.ACCESS_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(401).send({ message: 'forbidden access' });
+        }
+        req.decoded = decoded;
+        next();
+    });
+};
+
+
+
 
 // MongoDB connection
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
@@ -54,10 +73,33 @@ async function run() {
 app.post('/api/set-token', async(req,res)=>{
   const user = req.body
   const token = jwt.sign( user,process.env.ACCESS_SECRET, { 
-    expiresIn: '24h' });
-    console.log('print')
+  expiresIn: '24h' });
   res.send({token});
 })
+
+// middleware for admin and instructor
+const verifyAdmin = async (req, res, next) => {
+const email = req.decoded.email;
+const query = {email:email};
+const user = await userCollections.findOne(query);
+  if (user.role == 'admin') {
+    next();
+  } else{
+    return res.status(403).send({ message: 'unauthorized access' });
+
+  } 
+  }
+  const verifyInstructor = async (req, res, next) => {
+    const email = req.decoded.email;
+    const query = {email:email};
+    const user = await userCollections.findOne(query);
+      if (user.role == 'instructor') {
+        next();
+      } else{
+        return res.status(403).send({ message: 'unauthorized access' });
+    
+      } 
+      };
 
 app.post('/new-user', async(req,res)=>{
   const newUser = req.body
@@ -81,7 +123,7 @@ app.get('/users/:id', async(req,res)=>{
 
 // get users by email
 
-app.get('/user/:email', async(req,res)=>{
+app.get('/user/:email',verifyJWT, async(req,res)=>{
   const email = req.params.email
   const query = {email: email}
   const result = await userCollections.findOne(query);
@@ -95,7 +137,7 @@ app.post('/applied-instructors/:email', async(req,res)=>{
 })
 
 // delete users by id
-app.delete('delete-user/:id', async(req,res)=>{
+app.delete('delete-user/:id',verifyJWT,verifyAdmin, async(req,res)=>{
   const id = req.params.id
   const query = {_id:new ObjectId(id)}
   const result = await userCollections.deleteOne(query);
@@ -103,7 +145,7 @@ app.delete('delete-user/:id', async(req,res)=>{
 })
 
 // update users by id
-app.put('/update-user/:id', async (req, res) => {
+app.put('/update-user/:id', verifyJWT,verifyAdmin, async (req, res) => {
   const id = req.params.id;
   const updateUser = req.body;
   console.log(req.body)
@@ -125,7 +167,7 @@ app.put('/update-user/:id', async (req, res) => {
 })
 
 // Classes route to add new class
-app.post('/new-class', async (req, res) => {
+app.post('/new-class', verifyJWT,verifyInstructor,async (req, res) => {
   try {
     const newClass = req.body;
     newClass.availableSeats = parseInt(newClass.availableSeats);  // Make sure availableSeats is an integer
@@ -145,7 +187,7 @@ app.post('/new-class', async (req, res) => {
 })
 
  // GET ALL CLASSES ADDED BY INSTRUCTOR
- app.get('/classes/:email', async (req, res) => {
+ app.get('/classes/:email', verifyJWT,verifyInstructor, async (req, res) => {
   const email = req.params.email;
   const query = { instructorEmail: email };
   const result = await classesCollection.find(query).toArray();
@@ -158,7 +200,7 @@ app.post('/new-class', async (req, res) => {
 })
 
  // update  status  and reason
- app.put('/change-status/:id', async (req, res) => {
+ app.put('/change-status/:id', verifyJWT,verifyAdmin, async (req, res) => {
   const id = req.params.id;
   const status = req.body.status;
   console.log(req.body)
@@ -194,7 +236,7 @@ app.get('/class/:id', async (req, res) => {
 
 // Update class detail (all date)
 // http://localhost:5000/update-class/676fe7dd8b8ecd3a2b034efd
-app.put('/update-class/:id', async (req, res) => {
+app.put('/update-class/:id', verifyJWT,verifyInstructor,async (req, res) => {
   const id = req.params.id;
   const updateClass = req.body;
   const filter = { _id: new ObjectId(id) };
@@ -215,7 +257,7 @@ app.put('/update-class/:id', async (req, res) => {
 
 //http://localhost:5000/add-to-cart
 //post cart
-app.post('/add-to-cart',async (req,res)=>{
+app.post('/add-to-cart', verifyJWT, async (req,res)=>{
  const newCartItem = req.body;
  const result =  cartCollections.insertOne(newCartItem);
  res.send(result)
@@ -223,7 +265,7 @@ app.post('/add-to-cart',async (req,res)=>{
 
 //http://localhost:5000/cart-item/67780a69fc23d84abbbbea1d
 // get cart
-app.get('/cart-item/:id', async (req, res) => {
+app.get('/cart-item/:id', verifyJWT, async (req, res) => {
   const id =  req.params.id;
   const email = req.body.email;
   const query = {
@@ -236,7 +278,7 @@ app.get('/cart-item/:id', async (req, res) => {
 })
 
 // cart info by user email
-app.get('/cart/:email', async (req, res) => {
+app.get('/cart/:email', verifyJWT,async (req, res) => {
   const email = req.params.email;
   const query = {userMail:email}
   const projection = { classId: 1 };
@@ -249,7 +291,7 @@ app.get('/cart/:email', async (req, res) => {
 
 // delete cart items
 
-app.delete('/delete-cart-item/:id',async(req,res)=>{
+app.delete('/delete-cart-item/:id',verifyJWT,async(req,res)=>{
   const id = req.params.id;
   const query = { classId: id };
   const result = await cartCollections.deleteOne(query);
@@ -271,7 +313,7 @@ res.send({
 })
 
 // post payment info to db
-app.post('/payment-info', async (req, res) => {
+app.post('/payment-info',verifyJWT, async (req, res) => {
   const paymnetInfo = req.body;
   const classesId = paymnetInfo.classesId;
   const userEmail = paymnetInfo.userEmail;
@@ -325,40 +367,48 @@ app.get('/popular_classes', async(req,res)=>{
   res.send(result);
 })
 
-app.get('/popular-instructors', async(req,res)=>{
-  const pipeline=[{
-    $group: {
-      _id : "$instructorEmail",
-      totalEnrolled: {$sum: "$totalEnrolled"}
-    }
-  },
-  {
-    $lookup: {
-      from: "users",
-      localField: "_id",
-      foreignField: "email",
-      as: "instructor"
-    }
-  },
-  {
-    $project: {
-      _id: 0,
-      instructor: {
-        $arrayelemAt: ["$instructor",0]
+app.get('/popular-instructors', async (req, res) => {
+  const pipeline = [
+      {
+          $group: {
+              _id: "$instructorEmail",
+              totalEnrolled: { $sum: "$totalEnrolled" },
+          }
       },
-      $totalEnrolled: -1
-    }
-  },
-  {
-    $limit: 6
-  }
-];
-   const result = await classesCollection.aggregate(pipeline).toArray();
-   res.send(result);
+      {
+          $lookup: {
+              from: "users",
+              localField: "_id",
+              foreignField: "email",
+              as: "instructor"
+          }
+      },
+      {
+          $project: {
+              _id: 0,
+              instructor: {
+                  $arrayElemAt: ["$instructor", 0]
+              },
+              totalEnrolled: 1
+          }
+      },
+      {
+          $sort: {
+              totalEnrolled: -1
+          }
+      },
+      {
+          $limit: 6
+      }
+  ]
+  const result = await classesCollection.aggregate(pipeline).toArray();
+  res.send(result);
+
 })
 
+
 // admin status
-app.get('/admin-status', async(req,res)=>{
+app.get('/admin-status',verifyJWT,verifyAdmin, async(req,res)=>{
   const approvedClasses = ((await classesCollection.find({status: 'approved'})).toArray()).length;
   const pendingClasses = ((await classesCollection.find({status: 'pending'})).toArray()).length;
   const instructor = ((await classesCollection.find({role: 'instructor'})).toArray()).length;
@@ -381,7 +431,7 @@ app.get('/instructor', async(req,res)=>{
   res.send(result);
 })
 
-app.get('/enrolled-classes/:email', async(req,res)=>{
+app.get('/enrolled-classes/:email', verifyJWT, async(req,res)=>{
   const email = req.params.email;
   const query = {userEmail:email};
   const pipeline=[{
@@ -441,3 +491,4 @@ run().then(() => {
 }).catch((err) => {
   console.error('Error during initialization:', err);
 });
+``
